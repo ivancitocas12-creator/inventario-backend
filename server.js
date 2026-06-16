@@ -1,4 +1,3 @@
-// server.js - VERSIÓN DEFINITIVA PARA RAILWAY (CONSERVA TODO: EXCEL, QR, PYTHON, PRÉSTAMOS)
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
@@ -8,19 +7,17 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 require('dotenv').config();
 
-// ✅ NUEVO: Importar multer para manejo de archivos
-const multer = require('multer');
-
 const app = express();
 
 // ============================================
-// 📌 CONFIGURACIÓN PARA RAILWAY (SOLO ESTO CAMBIA)
+// CONFIGURACIÓN PARA RAILWAY
 // ============================================
 const DB_HOST = process.env.MYSQLHOST || process.env.DB_HOST || 'localhost';
 const DB_PORT = process.env.MYSQLPORT || process.env.DB_PORT || 3306;
 const DB_USER = process.env.MYSQLUSER || process.env.DB_USER || 'root';
 const DB_PASSWORD = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.MYSQLDATABASE || process.env.DB_NAME || 'railway';
+
 const PUBLIC_URL = process.env.RAILWAY_PUBLIC_DOMAIN 
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` 
     : `http://localhost:${process.env.PORT || 3000}`;
@@ -29,12 +26,11 @@ console.log('🔧 Configuración de conexión:');
 console.log('Host:', DB_HOST);
 console.log('Port:', DB_PORT);
 console.log('User:', DB_USER);
-console.log('Password:', DB_PASSWORD ? '****' : '(vacío)');
 console.log('Database:', DB_NAME);
 console.log('🌍 URL Pública:', PUBLIC_URL);
 
 // ============================================
-// SERVIR ARCHIVOS ESTÁTICOS
+// MIDDLEWARES
 // ============================================
 app.use(cors({
     origin: ['http://localhost:8100', 'http://localhost:4200', 'http://localhost:3000', PUBLIC_URL],
@@ -43,43 +39,17 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Ruta para los QR generados (se servirán estáticamente)
+// ============================================
+// CARPETAS ESTÁTICAS
+// ============================================
 app.use('/qr', express.static(path.join(__dirname, 'public/qr')));
 
-// ============================================
-// ✅ NUEVO: CREAR CARPETA PARA UPLOADS (Excel)
-// ============================================
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-    console.log('📁 Carpeta uploads creada:', uploadDir);
+// Crear carpeta para QR si no existe
+const qrDir = path.join(__dirname, 'public/qr');
+if (!fs.existsSync(qrDir)) {
+    fs.mkdirSync(qrDir, { recursive: true });
+    console.log('📁 Carpeta QR creada:', qrDir);
 }
-
-// ============================================
-// ✅ NUEVO: CONFIGURACIÓN DE MULTER
-// ============================================
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${file.originalname}`;
-        cb(null, uniqueName);
-    }
-});
-
-const upload = multer({
-    storage: storage,
-    fileFilter: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        if (ext === '.xlsx' || ext === '.xls') {
-            cb(null, true);
-        } else {
-            cb(new Error('Solo se permiten archivos Excel (.xlsx, .xls)'));
-        }
-    },
-    limits: { fileSize: 5 * 1024 * 1024 } // 5 MB
-});
 
 // ============================================
 // COLORES INSTITUCIONALES PARA EXCEL
@@ -93,16 +63,7 @@ const COLORES = {
 };
 
 // ============================================
-// CREAR CARPETA PARA QR SI NO EXISTE
-// ============================================
-const qrDir = path.join(__dirname, 'public/qr');
-if (!fs.existsSync(qrDir)) {
-    fs.mkdirSync(qrDir, { recursive: true });
-    console.log('📁 Carpeta para QR creada:', qrDir);
-}
-
-// ============================================
-// CONEXIÓN A MYSQL (PROMISE POOL)
+// CONEXIÓN A MYSQL (POOL)
 // ============================================
 const pool = mysql.createPool({
     host: DB_HOST,
@@ -164,7 +125,7 @@ function generarQRPython(codigo_unico, nombre, callback) {
 }
 
 // ============================================
-// 📌 TODAS TUS RUTAS EXISTENTES (materiales, categorías, préstamos, estadísticas, exportar, etc.)
+// RUTAS DE MATERIALES
 // ============================================
 
 // Obtener todos los materiales (con paginación)
@@ -299,7 +260,7 @@ app.put('/api/materiales/:id', async (req, res) => {
     }
 });
 
-// Eliminar un material (con verificación de préstamos activos)
+// Eliminar un material
 app.delete('/api/materiales/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -349,7 +310,9 @@ app.post('/api/materiales/:id/regenerar-qr', async (req, res) => {
     }
 });
 
-// EXPORTAR A EXCEL (tu código existente)
+// ============================================
+// EXPORTAR A EXCEL
+// ============================================
 app.get('/api/exportar-excel', async (req, res) => {
     try {
         const [materiales] = await promisePool.query(`
@@ -381,9 +344,95 @@ app.get('/api/exportar-excel', async (req, res) => {
         `);
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Inventario');
-        // ... (todo el resto de tu código de exportación, que ya está completo)
-        // No lo repito aquí para no alargar, pero debe permanecer tal cual
-        // ...
+        worksheet.mergeCells('A1:J3');
+        const titleCell = worksheet.getCell('A1');
+        titleCell.value = {
+            richText: [
+                { text: 'ESCUELA SECUNDARIA OFIC. No. 0167\n', font: { bold: true, size: 16, color: { argb: COLORES.AZUL } } },
+                { text: '"PROFR. FILIBERTO NAVAS VALDÉS"\n', font: { bold: true, size: 14, color: { argb: COLORES.AZUL } } },
+                { text: 'INVENTARIO DE LABORATORIO QUÍMICO', font: { bold: true, size: 18, color: { argb: COLORES.AZUL } } }
+            ]
+        };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORES.DORADO } };
+        titleCell.border = { top: { style: 'thick', color: { argb: COLORES.AZUL } }, bottom: { style: 'thick', color: { argb: COLORES.AZUL } }, left: { style: 'thick', color: { argb: COLORES.AZUL } }, right: { style: 'thick', color: { argb: COLORES.AZUL } } };
+        worksheet.mergeCells('A4:J4');
+        const dateCell = worksheet.getCell('A4');
+        dateCell.value = `Fecha de exportación: ${new Date().toLocaleString('es-MX', { dateStyle: 'full', timeStyle: 'medium' })}`;
+        dateCell.font = { italic: true, color: { argb: '666666' } };
+        dateCell.alignment = { horizontal: 'right' };
+        const headers = ['ID', 'Código Único', 'Nombre', 'Descripción', 'Categoría', 'Total', 'Disp.', 'Prest.', 'Ubicación', 'QR', 'Fecha Reg.', 'Estado'];
+        const headerRow = worksheet.addRow(headers);
+        headerRow.height = 30;
+        headerRow.eachCell((cell) => {
+            cell.font = { bold: true, color: { argb: COLORES.BLANCO }, size: 11 };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORES.AZUL } };
+            cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+        materiales.forEach((item, index) => {
+            const row = worksheet.addRow([item.id, item.codigo_unico, item.nombre, item.descripcion, item.categoria, item.cantidad_total, item.cantidad_disponible, item.cantidad_prestada, item.ubicacion, item.qr_code_path ? 'SÍ' : 'NO', item.fecha_registro, item.estado]);
+            if (index % 2 === 0) {
+                row.eachCell((cell) => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORES.GRIS } }; });
+            }
+            const estadoCell = row.getCell(12);
+            if (item.estado === 'AGOTADO') {
+                estadoCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B6B' } };
+                estadoCell.font = { bold: true, color: { argb: COLORES.BLANCO } };
+            } else if (item.estado === 'CRÍTICO') {
+                estadoCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA500' } };
+            } else if (item.estado === 'BAJO') {
+                estadoCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE55C' } };
+            }
+            row.eachCell((cell) => { cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }; });
+        });
+        const statsSheet = workbook.addWorksheet('Estadísticas');
+        statsSheet.mergeCells('A1:D3');
+        const statsTitle = statsSheet.getCell('A1');
+        statsTitle.value = 'RESUMEN ESTADÍSTICO DEL INVENTARIO';
+        statsTitle.font = { bold: true, size: 16, color: { argb: COLORES.AZUL } };
+        statsTitle.alignment = { horizontal: 'center', vertical: 'middle' };
+        statsTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORES.DORADO } };
+        const statsData = [
+            ['Total de materiales:', stats[0].total_materiales],
+            ['Total de items:', stats[0].total_items],
+            ['Items disponibles:', stats[0].items_disponibles],
+            ['Items prestados:', stats[0].items_prestados],
+            ['Materiales agotados:', stats[0].materiales_agotados],
+            ['Materiales en estado crítico:', stats[0].materiales_criticos],
+            ['% de disponibilidad:', ((stats[0].items_disponibles / stats[0].total_items) * 100).toFixed(2) + '%']
+        ];
+        let rowIndex = 5;
+        statsData.forEach(([label, value]) => {
+            const labelCell = statsSheet.getCell(`A${rowIndex}`);
+            labelCell.value = label;
+            labelCell.font = { bold: true };
+            const valueCell = statsSheet.getCell(`B${rowIndex}`);
+            valueCell.value = value;
+            valueCell.font = { color: { argb: COLORES.AZUL } };
+            rowIndex++;
+        });
+        const [prestamos] = await promisePool.query(`
+            SELECT p.id, m.nombre as material, u.nombre_completo as usuario, p.cantidad,
+            DATE_FORMAT(p.fecha_prestamo, '%d/%m/%Y') as fecha_prestamo,
+            DATE_FORMAT(p.fecha_devolucion, '%d/%m/%Y') as fecha_devolucion,
+            DATEDIFF(p.fecha_devolucion, CURDATE()) as dias_restantes, p.estado
+            FROM prestamos p
+            JOIN materiales m ON p.material_id = m.id
+            JOIN usuarios u ON p.usuario_id = u.id
+            WHERE p.estado = 'activo'
+            ORDER BY p.fecha_devolucion ASC
+        `);
+        if (prestamos.length > 0) {
+            const prestamosSheet = workbook.addWorksheet('Préstamos Activos');
+            prestamosSheet.addRow(['ID', 'Material', 'Usuario', 'Cantidad', 'Fecha Préstamo', 'Fecha Devolución', 'Días Restantes']);
+            prestamosSheet.getRow(1).eachCell((cell) => {
+                cell.font = { bold: true };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORES.AZUL_CLARO } };
+            });
+            prestamos.forEach(p => prestamosSheet.addRow(Object.values(p)));
+        }
+        worksheet.columns.forEach(column => { column.width = 18; });
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=inventario_${new Date().toISOString().split('T')[0]}.xlsx`);
         await workbook.xlsx.write(res);
@@ -395,138 +444,7 @@ app.get('/api/exportar-excel', async (req, res) => {
 });
 
 // ============================================
-// ✅ NUEVO: ENDPOINT PARA IMPORTAR EXCEL
-// ============================================
-app.post('/api/importar-excel', upload.single('archivo'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No se recibió ningún archivo' });
-    }
-
-    const filePath = req.file.path;
-    let workbook;
-    try {
-        workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.readFile(filePath);
-    } catch (error) {
-        fs.unlinkSync(filePath);
-        return res.status(400).json({ error: 'El archivo no es un Excel válido', detalle: error.message });
-    }
-
-    const worksheet = workbook.getWorksheet(1);
-    if (!worksheet) {
-        fs.unlinkSync(filePath);
-        return res.status(400).json({ error: 'El archivo no contiene datos' });
-    }
-
-    const rows = [];
-    worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return;
-        const rowData = row.values;
-        rows.push({
-            id: rowData[1],
-            codigo_unico: rowData[2]?.toString().trim() || '',
-            nombre: rowData[3]?.toString().trim() || '',
-            descripcion: rowData[4]?.toString().trim() || '',
-            categoria: rowData[5]?.toString().trim() || '',
-            cantidad_total: parseFloat(rowData[6]) || 0,
-            cantidad_disponible: parseFloat(rowData[7]) || 0,
-            cantidad_prestada: parseFloat(rowData[8]) || 0,
-            ubicacion: rowData[9]?.toString().trim() || '',
-            qr: rowData[10]?.toString().trim() || '',
-            fecha_registro: rowData[11],
-            estado: rowData[12]?.toString().trim() || ''
-        });
-    });
-
-    fs.unlinkSync(filePath);
-
-    if (rows.length === 0) {
-        return res.status(400).json({ error: 'El archivo no contiene datos válidos (sin filas de datos)' });
-    }
-
-    let insertados = 0;
-    let errores = [];
-    const connection = await promisePool.getConnection();
-
-    try {
-        await connection.beginTransaction();
-
-        for (const row of rows) {
-            if (!row.codigo_unico || !row.nombre) {
-                errores.push(`Fila con código "${row.codigo_unico || 'vacío'}" faltan campos obligatorios (código o nombre)`);
-                continue;
-            }
-
-            const [existentes] = await connection.query(
-                'SELECT id FROM materiales WHERE codigo_unico = ?',
-                [row.codigo_unico]
-            );
-            if (existentes.length > 0) {
-                errores.push(`Código "${row.codigo_unico}" ya existe (ID ${existentes[0].id})`);
-                continue;
-            }
-
-            let categoriaId = 1;
-            if (row.categoria) {
-                const [cats] = await connection.query(
-                    'SELECT id FROM categorias WHERE nombre = ?',
-                    [row.categoria]
-                );
-                if (cats.length > 0) {
-                    categoriaId = cats[0].id;
-                } else {
-                    const [result] = await connection.query(
-                        'INSERT INTO categorias (nombre) VALUES (?)',
-                        [row.categoria]
-                    );
-                    categoriaId = result.insertId;
-                }
-            }
-
-            const total = row.cantidad_total || 0;
-            const disponible = row.cantidad_disponible !== undefined && row.cantidad_disponible !== null
-                ? row.cantidad_disponible
-                : total;
-
-            const query = `
-                INSERT INTO materiales 
-                (codigo_unico, nombre, descripcion, categoria_id, cantidad_total, cantidad_disponible, ubicacion)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `;
-            const values = [
-                row.codigo_unico,
-                row.nombre,
-                row.descripcion || '',
-                categoriaId,
-                total,
-                disponible,
-                row.ubicacion || 'Sin ubicación'
-            ];
-            await connection.query(query, values);
-            insertados++;
-        }
-
-        await connection.commit();
-    } catch (error) {
-        await connection.rollback();
-        console.error('Error durante la importación:', error);
-        return res.status(500).json({ error: 'Error al procesar la importación', detalle: error.message });
-    } finally {
-        connection.release();
-    }
-
-    res.json({
-        success: true,
-        insertados: insertados,
-        errores: errores.length > 0 ? errores : undefined,
-        mensaje: errores.length > 0
-            ? `Se insertaron ${insertados} materiales, pero ${errores.length} filas tuvieron errores.`
-            : `Todos los ${insertados} materiales fueron importados correctamente.`
-    });
-});
-
-// ============================================
-// RUTAS DE CATEGORÍAS (igual que antes)
+// RUTAS DE CATEGORÍAS
 // ============================================
 app.get('/api/categorias', async (req, res) => {
     try {
@@ -556,7 +474,9 @@ app.get('/api/categorias/:id', async (req, res) => {
     }
 });
 
-// RUTAS DE PRÉSTAMOS (igual que antes)
+// ============================================
+// RUTAS DE PRÉSTAMOS
+// ============================================
 app.get('/api/prestamos/activos', async (req, res) => {
     try {
         const [results] = await promisePool.query(`
@@ -619,7 +539,9 @@ app.put('/api/prestamos/devolver/:id', async (req, res) => {
     }
 });
 
+// ============================================
 // ESTADÍSTICAS GENERALES
+// ============================================
 app.get('/api/estadisticas', async (req, res) => {
     try {
         const [materiales] = await promisePool.query(`SELECT COUNT(*) as total_materiales, SUM(cantidad_total) as total_items, SUM(cantidad_disponible) as items_disponibles, AVG(cantidad_disponible) as promedio_disponibilidad, COUNT(CASE WHEN cantidad_disponible = 0 THEN 1 END) as materiales_agotados FROM materiales`);
@@ -632,7 +554,9 @@ app.get('/api/estadisticas', async (req, res) => {
     }
 });
 
+// ============================================
 // HEALTH CHECK
+// ============================================
 app.get('/api/health', async (req, res) => {
     try {
         await promisePool.query('SELECT 1');
@@ -646,13 +570,17 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+// ============================================
 // MANEJO DE ERRORES GLOBAL
+// ============================================
 app.use((err, req, res, next) => {
     console.error('Error no manejado:', err);
     res.status(500).json({ error: 'Error interno del servidor', message: err.message });
 });
 
+// ============================================
 // INICIAR SERVIDOR
+// ============================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log('\n' + '='.repeat(60));
@@ -661,7 +589,6 @@ app.listen(PORT, () => {
     console.log(`📍 URL: ${PUBLIC_URL}`);
     console.log(`📊 API: ${PUBLIC_URL}/api`);
     console.log(`📁 QR Folder: ${qrDir}`);
-    console.log(`📁 Uploads Folder: ${uploadDir}`);
     console.log('\n📋 ENDPOINTS DISPONIBLES:');
     console.log('   GET    /api/health - Estado del servidor');
     console.log('   GET    /api/materiales - Lista materiales');
@@ -677,7 +604,6 @@ app.listen(PORT, () => {
     console.log('   PUT    /api/prestamos/devolver/:id - Devolver préstamo');
     console.log('   GET    /api/estadisticas - Estadísticas generales');
     console.log('   📊 GET    /api/exportar-excel - EXPORTAR A EXCEL');
-    console.log('   📥 POST   /api/importar-excel - IMPORTAR DESDE EXCEL');
     console.log('   📷 /qr/:archivo - Ver QR generados');
     console.log('='.repeat(60) + '\n');
 });
