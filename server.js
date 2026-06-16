@@ -315,6 +315,169 @@ app.post('/api/materiales/:id/regenerar-qr', async (req, res) => {
         res.status(500).json({ error: 'Error al regenerar QR' });
     }
 });
+// ============================================
+// 📥 IMPORTAR DESDE EXCEL
+// ============================================
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/' }); // carpeta temporal para archivos subidos
+
+app.post('/api/importar-excel', upload.single('archivo'), async (req, res) => {
+    // Validar que se haya subido un archivo
+    if (!req.file) {
+        return res.status(400).json({ error: 'No se recibió ningún archivo' });
+    }
+
+    const filePath = req.file.path;
+    try {
+        // Leer el archivo con exceljs
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(filePath);
+        const sheet = workbook.getWorksheet(1); // primera hoja
+        if (!sheet) {
+            throw new Error('El archivo no contiene hojas');
+        }
+
+        // Obtener encabezados de la primera fila
+        const headerRow = sheet.getRow(1);
+        const headers = headerRow.values.slice(1).map(h => h?.toString().trim() || '');
+        console.log('📋 Encabezados detectados:', headers);
+
+        // Mapeo flexible de columnas (ajusta según tus nombres reales)
+        const columnMap = {
+            codigo_unico: headers.findIndex(h => /codigo|code|id/i.test(h)),
+            nombre: headers.findIndex(h => /nombre|name/i.test(h)),
+            descripcion: headers.findIndex(h => /descripcion|description/i.test(h)),
+            categoria_nombre: headers.findIndex(h => /categoria|category/i.test(h)),
+            cantidad_total: headers.findIndex(h => /cantidad_total|total|stock/i.test(h)),
+            cantidad_disponible: headers.findIndex(h => /cantidad_disponible|disponible|available/i.test(h)),
+            ubicacion: headers.findIndex(h => /ubicacion|location|estante/i.test(h)),
+        };
+
+        // Validar columnas mínimas requeridas
+        const required = ['codigo_unico', 'nombre', 'cantidad_total'];
+        const missing = required.filter(key => columnMap[key] === -1);
+        if (missing.length > 0) {
+            // Intentar con nombres alternativos antes de fallar
+            // (puedes ajustar según tu Excel)
+            return res.status(400).json({
+                error: `Faltan columnas requeridas: ${missing.join(', ')}. Asegúrate que tu Excel tenga: codigo_unico, nombre, cantidad_total`
+            });
+        }
+
+        let insertados = 0;
+        let actualizados = 0;
+        let errores = [];
+
+        // Iterar filas (empezamos en 2 porque la fila 1 es encabezado)
+        for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+            const row = sheet.getRow(rowNumber);
+            const rowData = row.values.slice(1); // quitar undefined del inicio
+
+            // Extraer valores según mapeo
+            const codigo_unico = rowData[columnMap.codigo_unico]?.toString().trim() || '';
+            const nombre = rowData[columnMap.nombre]?.toString().trim() || '';
+            const descripcion = rowData[columnMap.descripcion]?.toString().trim() || '';
+            const categoria_nombre = rowData[columnMap.categoria_nombre]?.toString().trim() || '';
+            const cantidad_total = parseFloat(rowData[columnMap.cantidad_total]) || 0;
+            let cantidad_disponible = columnMap.cantidad_disponible !== -1 
+                ? parseFloat(rowData[columnMap.cantidad_disponible]) 
+                : cantidad_total; // si no se especifica, igual a total
+            const ubicacion = rowData[columnMap.ubicacion]?.toString().trim() || 'Sin ubicación';
+
+            // Validar datos mínimos
+            if (!codigo_unico || !nombre || cantidad_total <= 0) {
+                errores.push(`Fila ${rowNumber}: datos inválidos (código: '${codigo_unico}', nombre: '${nombre}', total: ${cantidad_total})`);
+                continue;
+            }
+
+            // Si cantidad_disponible no está definida o es inválida, usar total
+            if (isNaN(cantidad_disponible) || cantidad_disponible < 0) {
+                cantidad_disponible = cantidad_total;
+            }
+            if (cantidad_disponible > cantidad_total) {
+                cantidad_disponible = cantidad_total;
+            }
+
+            // Buscar categoría por nombre (si no existe, crear una nueva)
+            let categoria_id = null;
+            if (categoria_nombre) {
+                const [catResult] = await promisePool.query(
+                    'SELECT id FROM categorias WHERE nombre = ?',
+                    [categoria_nombre]
+                );
+                if (catResult.length > 0) {
+                    categoria_id = catResult[0].id;
+                } else {
+                    // Crear nueva categoría
+                    const [newCat] = await promisePool.query(
+                        'INSERT INTO categorias (nombre) VALUES (?)',
+                        [categoria_nombre]
+                    );
+                    categoria_id = newCat.insertId;
+                    console.log(`✅ Categoría "${categoria_nombre}" creada con ID ${categoria_id}`);
+                }
+            }
+
+            // Verificar si el material ya existe por código único
+            const [existing] = await promisePool.query(
+                'SELECT id, cantidad_total, cantidad_disponible FROM materiales WHERE codigo_unico = ?',
+                [codigo_unico]
+            );
+
+            if (existing.length > 0) {
+                // Actualizar
+                const id = existing[0].id;
+                // Sumar cantidades (o reemplazar según prefieras)
+                const nuevoTotal = cantidad_total; // o existing[0].cantidad_total + cantidad_total
+                const nuevoDisponible = cantidad_disponible; // o existing[0].cantidad_disponible + cantidad_disponible
+                await promisePool.query(
+                    `UPDATE materiales 
+                     SET nombre = ?, descripcion = ?, categoria_id = ?, 
+                         cantidad_total = ?, cantidad_disponible = ?, ubicacion = ?
+                     WHERE id = ?`,
+                    [nombre, descripcion, categoria_id, nuevoTotal, nuevoDisponible, ubicacion, id]
+                );
+                actualizados++;
+            } else {
+                // Insertar nuevo
+                await promisePool.query(
+                    `INSERT INTO materiales 
+                     (codigo_unico, nombre, descripcion, categoria_id, cantidad_total, cantidad_disponible, ubicacion) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [codigo_unico, nombre, descripcion, categoria_id, cantidad_total, cantidad_disponible, ubicacion]
+                );
+                insertados++;
+            }
+        }
+
+        // Limpiar archivo temporal
+        fs.unlinkSync(filePath);
+
+        // Enviar respuesta
+        const mensaje = `✅ Importación completada: ${insertados} nuevos, ${actualizados} actualizados, ${errores.length} errores`;
+        console.log(mensaje);
+        if (errores.length > 0) {
+            console.log('⚠️ Errores detectados:', errores);
+        }
+
+        res.json({
+            success: true,
+            insertados,
+            actualizados,
+            errores: errores.length > 0 ? errores : undefined,
+            mensaje
+        });
+
+    } catch (error) {
+        console.error('❌ Error importando Excel:', error);
+        // Intentar limpiar archivo temporal si existe
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        res.status(500).json({
+            error: 'Error al procesar el archivo',
+            detalle: error.message
+        });
+    }
+});
 
 // EXPORTAR A EXCEL (mantienes tu código completo, no lo acorto por claridad, pero está intacto)
 app.get('/api/exportar-excel', async (req, res) => {
