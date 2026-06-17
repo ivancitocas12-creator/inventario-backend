@@ -1,8 +1,6 @@
 FROM node:20-slim
 
-# ✅ Esto fuerza rebuild completo
-ARG CACHE_BUST=4
-
+# Forzar rebuild - v5
 RUN apt-get update && apt-get install -y \
     python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
