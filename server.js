@@ -6,8 +6,8 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 require('dotenv').config();
-const app = express();
 
+const app = express();
 
 // ============================================
 // CONFIGURACIÓN PARA RAILWAY
@@ -284,7 +284,6 @@ app.get('/api/materiales/:id', async (req, res) => {
     }
 });
 
-
 // POST crear un material
 app.post('/api/materiales', async (req, res) => {
     try {
@@ -295,7 +294,8 @@ app.post('/api/materiales', async (req, res) => {
         if (existente.length > 0) return res.status(400).json({ error: 'Ya existe un material con ese código' });
 
         const total = parseInt(cantidad_total) || 0;
-        const disponible = parseInt(cantidad_disponible) ?? total;
+        const disponibleParsed = parseInt(cantidad_disponible);
+        const disponible = Number.isFinite(disponibleParsed) ? disponibleParsed : total;
 
         const [result] = await promisePool.query(`
             INSERT INTO materiales (codigo_unico, nombre, descripcion, categoria_id, cantidad_total, cantidad_disponible, ubicacion)
@@ -345,8 +345,9 @@ app.post('/api/materiales/importar', async (req, res) => {
                 continue;
             }
 
-            const total     = parseInt(m.cantidad_total)      || 0;
-            const disponible = parseInt(m.cantidad_disponible) ?? total;
+            const total = parseInt(m.cantidad_total) || 0;
+            const disponibleParsed = parseInt(m.cantidad_disponible);
+            const disponible = Number.isFinite(disponibleParsed) ? disponibleParsed : total;
 
             const [result] = await promisePool.query(`
                 INSERT INTO materiales
@@ -752,11 +753,24 @@ app.get('/api/estadisticas', async (req, res) => {
 });
 
 // ============================================
+// RUTA NO ENCONTRADA (404) — SIEMPRE JSON
+// ============================================
+// Si el frontend llama a un endpoint que no existe (por ejemplo, por un
+// desfase de versiones entre backend y frontend, o una ruta mal escrita),
+// Express respondería por defecto con una página HTML. Eso es justo lo que
+// rompe el "response.json()" del cliente con el error:
+// "Unexpected token '<' ... is not valid JSON".
+// Este middleware garantiza que SIEMPRE se devuelva JSON.
+app.use((req, res) => {
+    res.status(404).json({ error: 'Endpoint no encontrado', ruta: req.originalUrl, metodo: req.method });
+});
+
+// ============================================
 // MANEJO DE ERRORES GLOBAL
 // ============================================
 app.use((err, req, res, next) => {
     console.error('Error no manejado:', err);
-    res.status(500).json({ error: 'Error interno del servidor', message: err.message });
+    res.status(err.status || err.statusCode || 500).json({ error: 'Error interno del servidor', message: err.message });
 });
 
 // ============================================
