@@ -315,7 +315,81 @@ app.post('/api/materiales', async (req, res) => {
         res.status(500).json({ error: 'Error al crear material' });
     }
 });
+// ============================================
+// IMPORTACIÓN MASIVA DESDE EXCEL (vía JSON)
+// ============================================
+app.post('/api/materiales/importar', async (req, res) => {
+    const { materiales } = req.body;
 
+    if (!Array.isArray(materiales) || materiales.length === 0) {
+        return res.status(400).json({ error: 'Se requiere un array de materiales' });
+    }
+
+    const insertados = [];
+    const errores    = [];
+    const omitidos   = [];
+
+    for (let i = 0; i < materiales.length; i++) {
+        const m = materiales[i];
+        try {
+            if (!m.codigo_unico || !m.nombre) {
+                errores.push({ fila: i + 1, error: 'Falta código_unico o nombre', dato: m });
+                continue;
+            }
+
+            // Verificar si ya existe
+            const [existente] = await promisePool.query(
+                'SELECT id FROM materiales WHERE codigo_unico = ?', [m.codigo_unico]
+            );
+            if (existente.length > 0) {
+                omitidos.push({ fila: i + 1, codigo: m.codigo_unico, razon: 'Ya existe' });
+                continue;
+            }
+
+            const total = parseInt(m.cantidad_total) || 0;
+            const disponibleParsed = parseInt(m.cantidad_disponible);
+            const disponible = Number.isFinite(disponibleParsed) ? disponibleParsed : total;
+
+            const [result] = await promisePool.query(`
+                INSERT INTO materiales
+                    (codigo_unico, nombre, descripcion, categoria_id, cantidad_total, cantidad_disponible, ubicacion, imagen_url, qr_code_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                String(m.codigo_unico).trim(),
+                String(m.nombre).trim(),
+                String(m.descripcion || '').trim(),
+                parseInt(m.categoria_id) || 1,
+                total,
+                disponible,
+                String(m.ubicacion || 'Sin ubicación').trim(),
+                String(m.imagen_url || '').trim(),
+                String(m.qr_code_path || '').trim()
+            ]);
+
+            const nuevoId = result.insertId;
+            insertados.push({ id: nuevoId, codigo: m.codigo_unico, nombre: m.nombre });
+
+            // Generar QR (si tienes la función)
+            if (typeof generarQRPromise === 'function') {
+                generarQRPromise(m.codigo_unico, m.nombre)
+                    .then(qrInfo => promisePool.query('UPDATE materiales SET qr_code_path = ? WHERE id = ?', [qrInfo.url, nuevoId]))
+                    .catch(e => console.warn(`⚠️ QR no generado para ${m.codigo_unico}:`, e.message));
+            }
+
+        } catch (err) {
+            errores.push({ fila: i + 1, error: err.message, dato: m });
+            console.error(`❌ Error en fila ${i + 1}:`, err.message);
+        }
+    }
+
+    res.status(200).json({
+        message: `Importación completada`,
+        insertados: insertados.length,
+        omitidos:   omitidos.length,
+        errores:    errores.length,
+        detalle: { insertados, omitidos, errores }
+    });
+});
 // ✅ POST IMPORTACIÓN MASIVA DESDE EXCEL
 app.post('/api/materiales/importar', async (req, res) => {
     const { materiales } = req.body;
