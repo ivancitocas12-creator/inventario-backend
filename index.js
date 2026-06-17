@@ -284,6 +284,7 @@ app.get('/api/materiales/:id', async (req, res) => {
     }
 });
 
+
 // POST crear un material
 app.post('/api/materiales', async (req, res) => {
     try {
